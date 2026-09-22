@@ -295,7 +295,7 @@
     // SETUP: Paste the /exec URL from your Apps Script web-app deployment here.
     // Example: https://script.google.com/macros/s/ABC123/exec
     // -------------------------------------------------------------------------
-    const TRANSLATION_SERVICE_URL = 'https://script.google.com/macros/s/AKfycbw4uPsF1gsVDqTTeQBNXH8z_lF4gkV6oaQVyNpOzg8rUzRuYK42zBTDnBggtbNJicg7/exec';
+    const TRANSLATION_SERVICE_URL = 'https://script.google.com/macros/s/AKfycbxxp_0hSehKsEQ18Dfa6mPq91aVu4UE259JRDl_GhGV9S3fh965HbrPSn5Tntng1wlZ/exec';
 
     const sourceLang = document.getElementById('sourceLang');
     const targetLang = document.getElementById('targetLang');
@@ -313,6 +313,7 @@
     let isListening = false;
     let lastTranslation = '';
     let activeNonce = '';
+    let translationTimer = null;
     let microphonePermissionChecked = false;
 
     function serviceConfigured() {
@@ -389,8 +390,21 @@
         return;
       }
 
+      if (!text || !text.trim()) return;
+
       activeNonce = makeNonce();
+      const requestNonce = activeNonce;
       setStatus('Translating...');
+      showPlaceholder(translatedText, 'Translating...');
+
+      if (translationTimer) clearTimeout(translationTimer);
+      translationTimer = setTimeout(() => {
+        if (activeNonce === requestNonce) {
+          activeNonce = '';
+          setStatus('The translation service did not answer. Update/redeploy Code.gs, then try again.', 'error');
+          showPlaceholder(translatedText, 'Translation did not return.');
+        }
+      }, 12000);
 
       const form = document.createElement('form');
       form.method = 'POST';
@@ -424,6 +438,7 @@
       if (!activeNonce || data.nonce !== activeNonce) return;
 
       activeNonce = '';
+      if (translationTimer) { clearTimeout(translationTimer); translationTimer = null; }
 
       if (data.ok) {
         lastTranslation = data.translated || '';
@@ -482,6 +497,11 @@
 
         const displayText = (finalTranscript + interimTranscript).trim();
         if (displayText) showText(heardText, displayText);
+
+        const latest = event.results[event.results.length - 1];
+        if (latest && latest.isFinal && finalTranscript.trim()) {
+          translate(finalTranscript.trim());
+        }
       };
 
       recognition.onerror = event => {
@@ -506,7 +526,7 @@
 
         if (text) {
           showText(heardText, text);
-          translate(text);
+          if (!activeNonce && !lastTranslation) translate(text);
         } else if (!statusEl.classList.contains('error')) {
           setStatus('I did not catch anything. Tap the microphone and try again.', 'warning');
         }
@@ -547,6 +567,7 @@
       if ('speechSynthesis' in window) window.speechSynthesis.cancel();
       lastTranslation = '';
       activeNonce = '';
+      if (translationTimer) { clearTimeout(translationTimer); translationTimer = null; }
       showPlaceholder(heardText, 'Your speech will appear here.');
       showPlaceholder(translatedText, 'The translation will appear here.');
       setStatus('Ready');
