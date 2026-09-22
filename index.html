@@ -202,13 +202,6 @@
       line-height: 1.4;
     }
 
-    iframe[name="translateFrame"] {
-      width: 0;
-      height: 0;
-      border: 0;
-      position: absolute;
-      left: -9999px;
-    }
 
     @media (max-width: 700px) {
       .app { padding: 14px; }
@@ -288,7 +281,6 @@
     </div>
   </div>
 
-  <iframe name="translateFrame" id="translateFrame" title="Translation service"></iframe>
 
   <script>
     // -------------------------------------------------------------------------
@@ -392,62 +384,81 @@
 
       if (!text || !text.trim()) return;
 
-      activeNonce = makeNonce();
+      // Cancel any older request timer. The newest speech segment wins.
+      if (translationTimer) {
+        clearTimeout(translationTimer);
+        translationTimer = null;
+      }
+
+      activeNonce = makeNonce().replace(/[^A-Za-z0-9_-]/g, '');
       const requestNonce = activeNonce;
+      const callbackName = 'prcsdTranslate_' + requestNonce.replace(/-/g, '_');
+
       setStatus('Translating...');
       showPlaceholder(translatedText, 'Translating...');
 
-      if (translationTimer) clearTimeout(translationTimer);
-      translationTimer = setTimeout(() => {
-        if (activeNonce === requestNonce) {
-          activeNonce = '';
-          setStatus('The translation service did not answer. Update/redeploy Code.gs, then try again.', 'error');
-          showPlaceholder(translatedText, 'Translation did not return.');
+      const script = document.createElement('script');
+      script.id = 'translationRequest_' + requestNonce;
+
+      function cleanup() {
+        if (translationTimer) {
+          clearTimeout(translationTimer);
+          translationTimer = null;
         }
-      }, 12000);
+        try { delete window[callbackName]; } catch (_) { window[callbackName] = undefined; }
+        if (script.parentNode) script.parentNode.removeChild(script);
+      }
 
-      const form = document.createElement('form');
-      form.method = 'POST';
-      form.action = TRANSLATION_SERVICE_URL;
-      form.target = 'translateFrame';
-      form.style.display = 'none';
+      window[callbackName] = function(data) {
+        if (!data || data.type !== 'PRCSD_TRANSLATION_RESULT') return;
+        if (!activeNonce || data.nonce !== activeNonce) return;
 
-      const fields = {
-        text: text,
-        source: sourceLang.value,
-        target: targetLang.value,
-        nonce: activeNonce
+        activeNonce = '';
+        cleanup();
+
+        if (data.ok) {
+          lastTranslation = data.translated || '';
+          showText(translatedText, lastTranslation);
+          setStatus('Translation ready', 'success');
+        } else {
+          lastTranslation = '';
+          setStatus('Translation failed: ' + (data.error || 'Unknown error'), 'error');
+          showPlaceholder(translatedText, 'Translation failed.');
+        }
       };
 
-      Object.entries(fields).forEach(([name, value]) => {
-        const input = document.createElement('input');
-        input.type = 'hidden';
-        input.name = name;
-        input.value = value;
-        form.appendChild(input);
+      const params = new URLSearchParams({
+        action: 'translate',
+        text: text.trim(),
+        source: sourceLang.value,
+        target: targetLang.value,
+        nonce: requestNonce,
+        callback: callbackName
       });
 
-      document.body.appendChild(form);
-      form.submit();
-      form.remove();
+      script.src = TRANSLATION_SERVICE_URL + '?' + params.toString();
+      script.async = true;
+
+      script.onerror = function() {
+        if (activeNonce !== requestNonce) return;
+        activeNonce = '';
+        cleanup();
+        lastTranslation = '';
+        setStatus('Could not reach the translation service. Make sure the Apps Script deployment is updated and accessible.', 'error');
+        showPlaceholder(translatedText, 'Translation service could not be reached.');
+      };
+
+      translationTimer = setTimeout(function() {
+        if (activeNonce !== requestNonce) return;
+        activeNonce = '';
+        cleanup();
+        lastTranslation = '';
+        setStatus('The translation service did not answer. Make sure Apps Script is redeployed to version 0.4.', 'error');
+        showPlaceholder(translatedText, 'Translation did not return.');
+      }, 15000);
+
+      document.head.appendChild(script);
     }
-
-    window.addEventListener('message', event => {
-      const data = event.data;
-      if (!data || data.type !== 'PRCSD_TRANSLATION_RESULT') return;
-      if (!activeNonce || data.nonce !== activeNonce) return;
-
-      activeNonce = '';
-      if (translationTimer) { clearTimeout(translationTimer); translationTimer = null; }
-
-      if (data.ok) {
-        lastTranslation = data.translated || '';
-        showText(translatedText, lastTranslation);
-        setStatus('Translation ready', 'success');
-      } else {
-        setStatus('Translation failed: ' + (data.error || 'Unknown error'), 'error');
-      }
-    });
 
     async function startRecognition() {
       if (!SpeechRecognition) {
