@@ -1,0 +1,580 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>PRCSD Live Translator</title>
+  <style>
+    :root {
+      --navy: #12304a;
+      --blue: #1f5f8b;
+      --light: #f4f7fa;
+      --border: #d7e0e7;
+      --text: #1f2933;
+      --muted: #687784;
+      --danger: #b23b3b;
+      --success: #247451;
+      --warning: #8a6518;
+    }
+
+    * { box-sizing: border-box; }
+
+    body {
+      margin: 0;
+      font-family: Arial, Helvetica, sans-serif;
+      background: var(--light);
+      color: var(--text);
+    }
+
+    .app {
+      max-width: 900px;
+      margin: 0 auto;
+      padding: 24px;
+    }
+
+    .header {
+      text-align: center;
+      margin-bottom: 22px;
+    }
+
+    .header h1 {
+      margin: 0 0 6px;
+      color: var(--navy);
+      font-size: clamp(28px, 5vw, 42px);
+    }
+
+    .header p {
+      margin: 0;
+      color: var(--muted);
+      font-size: 16px;
+    }
+
+    .card {
+      background: #fff;
+      border: 1px solid var(--border);
+      border-radius: 18px;
+      padding: 22px;
+      box-shadow: 0 8px 24px rgba(21, 43, 60, 0.08);
+    }
+
+    .setup-warning {
+      display: none;
+      margin-bottom: 18px;
+      padding: 14px 16px;
+      border-radius: 12px;
+      background: #fff6df;
+      border: 1px solid #ead197;
+      color: #6f5318;
+      line-height: 1.45;
+    }
+
+    .language-row {
+      display: grid;
+      grid-template-columns: 1fr auto 1fr;
+      gap: 12px;
+      align-items: end;
+      margin-bottom: 18px;
+    }
+
+    label {
+      display: block;
+      font-size: 13px;
+      font-weight: 700;
+      color: var(--muted);
+      margin-bottom: 6px;
+      text-transform: uppercase;
+      letter-spacing: .04em;
+    }
+
+    select {
+      width: 100%;
+      min-height: 46px;
+      border: 1px solid var(--border);
+      border-radius: 10px;
+      padding: 0 12px;
+      font-size: 16px;
+      background: #fff;
+      color: var(--text);
+    }
+
+    .swap-btn {
+      border: 0;
+      background: #e9f1f7;
+      color: var(--navy);
+      width: 46px;
+      height: 46px;
+      border-radius: 50%;
+      font-size: 21px;
+      cursor: pointer;
+    }
+
+    .mic-wrap {
+      display: flex;
+      justify-content: center;
+      margin: 18px 0 18px;
+    }
+
+    .mic-btn {
+      border: 0;
+      width: 170px;
+      height: 170px;
+      border-radius: 50%;
+      background: var(--blue);
+      color: white;
+      cursor: pointer;
+      font-size: 22px;
+      font-weight: 700;
+      box-shadow: 0 12px 28px rgba(31, 95, 139, .28);
+      transition: transform .15s ease, background .15s ease;
+    }
+
+    .mic-btn:hover { transform: translateY(-2px); }
+    .mic-btn.listening { background: var(--danger); }
+    .mic-btn:disabled { opacity: .55; cursor: not-allowed; transform: none; }
+
+    .status {
+      text-align: center;
+      min-height: 24px;
+      color: var(--muted);
+      margin-bottom: 14px;
+      font-size: 14px;
+      font-weight: 600;
+    }
+
+    .status.error { color: var(--danger); }
+    .status.success { color: var(--success); }
+    .status.warning { color: var(--warning); }
+
+    .panels {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 16px;
+    }
+
+    .panel {
+      border: 1px solid var(--border);
+      border-radius: 14px;
+      padding: 16px;
+      min-height: 180px;
+      background: #fff;
+    }
+
+    .panel h2 {
+      margin: 0 0 10px;
+      font-size: 16px;
+      color: var(--navy);
+    }
+
+    .text-box {
+      font-size: 24px;
+      line-height: 1.4;
+      white-space: pre-wrap;
+      min-height: 95px;
+    }
+
+    .placeholder { color: #a2adb5; }
+
+    .actions {
+      display: flex;
+      gap: 10px;
+      margin-top: 16px;
+      flex-wrap: wrap;
+      justify-content: center;
+    }
+
+    .action-btn {
+      border: 0;
+      border-radius: 10px;
+      padding: 11px 16px;
+      font-size: 15px;
+      font-weight: 700;
+      cursor: pointer;
+    }
+
+    .speak-btn { background: var(--navy); color: #fff; }
+    .clear-btn { background: #edf1f4; color: var(--text); }
+
+    .privacy {
+      margin-top: 16px;
+      text-align: center;
+      font-size: 13px;
+      color: var(--muted);
+      line-height: 1.4;
+    }
+
+    iframe[name="translateFrame"] {
+      width: 0;
+      height: 0;
+      border: 0;
+      position: absolute;
+      left: -9999px;
+    }
+
+    @media (max-width: 700px) {
+      .app { padding: 14px; }
+      .language-row { grid-template-columns: 1fr; }
+      .swap-btn { margin: 0 auto; transform: rotate(90deg); }
+      .panels { grid-template-columns: 1fr; }
+      .mic-btn { width: 145px; height: 145px; }
+      .text-box { font-size: 21px; }
+    }
+  </style>
+</head>
+<body>
+  <div class="app">
+    <div class="header">
+      <h1>Live Translator</h1>
+      <p>Speak it. See it. Translate it.</p>
+    </div>
+
+    <div class="card">
+      <div id="setupWarning" class="setup-warning">
+        <strong>One setup step remains:</strong> paste your deployed Apps Script web-app URL into the
+        <code>TRANSLATION_SERVICE_URL</code> line near the top of this file.
+      </div>
+
+      <div class="language-row">
+        <div>
+          <label for="sourceLang">I am speaking</label>
+          <select id="sourceLang">
+            <option value="en" data-locale="en-US">English</option>
+            <option value="es" data-locale="es-US">Spanish</option>
+            <option value="fr" data-locale="fr-FR">French</option>
+            <option value="de" data-locale="de-DE">German</option>
+            <option value="it" data-locale="it-IT">Italian</option>
+            <option value="pt" data-locale="pt-BR">Portuguese</option>
+          </select>
+        </div>
+
+        <button class="swap-btn" id="swapBtn" title="Swap languages" aria-label="Swap languages">⇄</button>
+
+        <div>
+          <label for="targetLang">Translate to</label>
+          <select id="targetLang">
+            <option value="es" data-locale="es-US">Spanish</option>
+            <option value="en" data-locale="en-US">English</option>
+            <option value="fr" data-locale="fr-FR">French</option>
+            <option value="de" data-locale="de-DE">German</option>
+            <option value="it" data-locale="it-IT">Italian</option>
+            <option value="pt" data-locale="pt-BR">Portuguese</option>
+          </select>
+        </div>
+      </div>
+
+      <div class="mic-wrap">
+        <button id="micBtn" class="mic-btn">🎤<br>Tap to Speak</button>
+      </div>
+
+      <div id="status" class="status">Ready</div>
+
+      <div class="panels">
+        <div class="panel">
+          <h2>What I heard</h2>
+          <div id="heardText" class="text-box placeholder">Your speech will appear here.</div>
+        </div>
+
+        <div class="panel">
+          <h2>Translation</h2>
+          <div id="translatedText" class="text-box placeholder">The translation will appear here.</div>
+        </div>
+      </div>
+
+      <div class="actions">
+        <button id="speakBtn" class="action-btn speak-btn">🔊 Speak Translation</button>
+        <button id="clearBtn" class="action-btn clear-btn">Clear</button>
+      </div>
+
+      <div class="privacy">Test version: no conversation history is saved by the app.</div>
+    </div>
+  </div>
+
+  <iframe name="translateFrame" id="translateFrame" title="Translation service"></iframe>
+
+  <script>
+    // -------------------------------------------------------------------------
+    // SETUP: Paste the /exec URL from your Apps Script web-app deployment here.
+    // Example: https://script.google.com/macros/s/ABC123/exec
+    // -------------------------------------------------------------------------
+    const TRANSLATION_SERVICE_URL = 'https://script.google.com/macros/s/AKfycbw4uPsF1gsVDqTTeQBNXH8z_lF4gkV6oaQVyNpOzg8rUzRuYK42zBTDnBggtbNJicg7/exec';
+
+    const sourceLang = document.getElementById('sourceLang');
+    const targetLang = document.getElementById('targetLang');
+    const micBtn = document.getElementById('micBtn');
+    const swapBtn = document.getElementById('swapBtn');
+    const speakBtn = document.getElementById('speakBtn');
+    const clearBtn = document.getElementById('clearBtn');
+    const heardText = document.getElementById('heardText');
+    const translatedText = document.getElementById('translatedText');
+    const statusEl = document.getElementById('status');
+    const setupWarning = document.getElementById('setupWarning');
+
+    const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
+    let recognition = null;
+    let isListening = false;
+    let lastTranslation = '';
+    let activeNonce = '';
+    let microphonePermissionChecked = false;
+
+    function serviceConfigured() {
+      return /^https:\/\/script\.google\.com\/macros\/s\/.+\/exec/.test(TRANSLATION_SERVICE_URL);
+    }
+
+    function getSelectedLocale(select) {
+      return select.options[select.selectedIndex].dataset.locale || select.value;
+    }
+
+    function setStatus(message, kind = '') {
+      statusEl.textContent = message;
+      statusEl.className = 'status' + (kind ? ' ' + kind : '');
+    }
+
+    function setListeningState(listening) {
+      isListening = listening;
+      micBtn.classList.toggle('listening', listening);
+      micBtn.innerHTML = listening ? '⏹️<br>Listening...' : '🎤<br>Tap to Speak';
+    }
+
+    function showText(el, text) {
+      el.textContent = text;
+      el.classList.remove('placeholder');
+    }
+
+    function showPlaceholder(el, text) {
+      el.textContent = text;
+      el.classList.add('placeholder');
+    }
+
+    function makeNonce() {
+      if (window.crypto && crypto.randomUUID) return crypto.randomUUID();
+      return Date.now() + '_' + Math.random().toString(36).slice(2);
+    }
+
+    async function ensureMicrophonePermission() {
+      if (microphonePermissionChecked) return true;
+
+      if (!window.isSecureContext) {
+        setStatus('Microphone access requires an HTTPS webpage.', 'error');
+        return false;
+      }
+
+      if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+        // SpeechRecognition may still work in some browsers. Let it try.
+        microphonePermissionChecked = true;
+        return true;
+      }
+
+      try {
+        setStatus('Requesting microphone permission...');
+        const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+        stream.getTracks().forEach(track => track.stop());
+        microphonePermissionChecked = true;
+        return true;
+      } catch (err) {
+        console.error('Microphone permission error:', err);
+        if (err && (err.name === 'NotAllowedError' || err.name === 'PermissionDeniedError')) {
+          setStatus('Microphone permission is blocked. Use the lock/site-controls icon in Chrome and allow Microphone, then reload.', 'error');
+        } else if (err && err.name === 'NotFoundError') {
+          setStatus('Chrome cannot find a microphone on this device.', 'error');
+        } else {
+          setStatus('Unable to access the microphone: ' + (err.message || err), 'error');
+        }
+        return false;
+      }
+    }
+
+    function translate(text) {
+      if (!serviceConfigured()) {
+        setupWarning.style.display = 'block';
+        setStatus('Translation service URL still needs to be added.', 'warning');
+        return;
+      }
+
+      activeNonce = makeNonce();
+      setStatus('Translating...');
+
+      const form = document.createElement('form');
+      form.method = 'POST';
+      form.action = TRANSLATION_SERVICE_URL;
+      form.target = 'translateFrame';
+      form.style.display = 'none';
+
+      const fields = {
+        text: text,
+        source: sourceLang.value,
+        target: targetLang.value,
+        nonce: activeNonce
+      };
+
+      Object.entries(fields).forEach(([name, value]) => {
+        const input = document.createElement('input');
+        input.type = 'hidden';
+        input.name = name;
+        input.value = value;
+        form.appendChild(input);
+      });
+
+      document.body.appendChild(form);
+      form.submit();
+      form.remove();
+    }
+
+    window.addEventListener('message', event => {
+      const data = event.data;
+      if (!data || data.type !== 'PRCSD_TRANSLATION_RESULT') return;
+      if (!activeNonce || data.nonce !== activeNonce) return;
+
+      activeNonce = '';
+
+      if (data.ok) {
+        lastTranslation = data.translated || '';
+        showText(translatedText, lastTranslation);
+        setStatus('Translation ready', 'success');
+      } else {
+        setStatus('Translation failed: ' + (data.error || 'Unknown error'), 'error');
+      }
+    });
+
+    async function startRecognition() {
+      if (!SpeechRecognition) {
+        setStatus('Speech recognition is not supported in this browser. Open this page in current Google Chrome.', 'error');
+        return;
+      }
+
+      if (isListening && recognition) {
+        recognition.stop();
+        return;
+      }
+
+      const allowed = await ensureMicrophonePermission();
+      if (!allowed) return;
+
+      recognition = new SpeechRecognition();
+      recognition.lang = getSelectedLocale(sourceLang);
+      recognition.interimResults = true;
+      recognition.continuous = false;
+      recognition.maxAlternatives = 1;
+
+      let finalTranscript = '';
+      let interimTranscript = '';
+
+      recognition.onstart = () => {
+        setListeningState(true);
+        setStatus('Listening... Speak now.');
+        showPlaceholder(translatedText, 'Waiting for speech...');
+        lastTranslation = '';
+      };
+
+      recognition.onspeechstart = () => {
+        setStatus('I hear you...');
+      };
+
+      recognition.onresult = event => {
+        interimTranscript = '';
+
+        for (let i = event.resultIndex; i < event.results.length; i++) {
+          const transcript = event.results[i][0].transcript;
+          if (event.results[i].isFinal) {
+            finalTranscript += transcript;
+          } else {
+            interimTranscript += transcript;
+          }
+        }
+
+        const displayText = (finalTranscript + interimTranscript).trim();
+        if (displayText) showText(heardText, displayText);
+      };
+
+      recognition.onerror = event => {
+        console.error('Speech recognition error:', event.error, event.message || '');
+        setListeningState(false);
+
+        const messages = {
+          'not-allowed': 'Chrome blocked speech recognition. Allow microphone access for this site, then reload.',
+          'service-not-allowed': 'Chrome is not allowing its speech-recognition service for this page.',
+          'audio-capture': 'Chrome could not capture audio from the microphone.',
+          'no-speech': 'I did not hear speech. Tap the microphone and try again.',
+          'network': 'Speech recognition could not reach its recognition service. Check the internet connection.',
+          'language-not-supported': 'Speech recognition does not support the selected language on this device.'
+        };
+
+        setStatus(messages[event.error] || ('Microphone error: ' + event.error), 'error');
+      };
+
+      recognition.onend = () => {
+        setListeningState(false);
+        const text = (finalTranscript || interimTranscript).trim();
+
+        if (text) {
+          showText(heardText, text);
+          translate(text);
+        } else if (!statusEl.classList.contains('error')) {
+          setStatus('I did not catch anything. Tap the microphone and try again.', 'warning');
+        }
+      };
+
+      try {
+        recognition.start();
+      } catch (err) {
+        console.error(err);
+        setListeningState(false);
+        setStatus('Could not start speech recognition: ' + (err.message || err), 'error');
+      }
+    }
+
+    function speakTranslation() {
+      if (!lastTranslation) {
+        setStatus('Translate something first.', 'warning');
+        return;
+      }
+
+      if (!('speechSynthesis' in window)) {
+        setStatus('Text-to-speech is not supported in this browser.', 'error');
+        return;
+      }
+
+      window.speechSynthesis.cancel();
+      const utterance = new SpeechSynthesisUtterance(lastTranslation);
+      utterance.lang = getSelectedLocale(targetLang);
+      utterance.rate = 0.95;
+      utterance.onend = () => setStatus('Ready', 'success');
+      utterance.onerror = () => setStatus('Could not play the translation audio.', 'error');
+      window.speechSynthesis.speak(utterance);
+      setStatus('Speaking translation...');
+    }
+
+    function clearAll() {
+      if (recognition && isListening) recognition.stop();
+      if ('speechSynthesis' in window) window.speechSynthesis.cancel();
+      lastTranslation = '';
+      activeNonce = '';
+      showPlaceholder(heardText, 'Your speech will appear here.');
+      showPlaceholder(translatedText, 'The translation will appear here.');
+      setStatus('Ready');
+    }
+
+    function swapLanguages() {
+      const sourceValue = sourceLang.value;
+      const targetValue = targetLang.value;
+      sourceLang.value = targetValue;
+      targetLang.value = sourceValue;
+      clearAll();
+    }
+
+    micBtn.addEventListener('click', startRecognition);
+    speakBtn.addEventListener('click', speakTranslation);
+    clearBtn.addEventListener('click', clearAll);
+    swapBtn.addEventListener('click', swapLanguages);
+
+    if (!serviceConfigured()) {
+      setupWarning.style.display = 'block';
+    }
+
+    if (!window.isSecureContext) {
+      setStatus('This page must be hosted over HTTPS for microphone access.', 'error');
+      micBtn.disabled = true;
+    } else if (!SpeechRecognition) {
+      setStatus('Open this page in Google Chrome to use speech recognition.', 'warning');
+    }
+  </script>
+</body>
+</html>
