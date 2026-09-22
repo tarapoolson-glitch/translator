@@ -196,6 +196,14 @@
     .speak-btn { background: var(--navy); color: #fff; }
     .clear-btn { background: #edf1f4; color: var(--text); }
 
+    .engine {
+      margin: -2px 0 14px;
+      text-align: center;
+      font-size: 12px;
+      font-weight: 700;
+      color: var(--muted);
+    }
+
     .privacy {
       margin-top: 16px;
       text-align: center;
@@ -257,6 +265,7 @@
       </div>
 
       <div id="status" class="status">Ready</div>
+      <div id="engine" class="engine">Translation engine: checking…</div>
 
       <div class="panels">
         <div class="panel">
@@ -276,7 +285,7 @@
       </div>
 
       <div class="privacy">
-        Translation is performed by Chrome's built-in translator when supported. This test app does not save conversation history.
+        This prototype uses on-device translation when available. On phones or unsupported browsers, text is sent to a cloud translation service. Do not use confidential or student-identifying information while testing.
       </div>
     </div>
   </div>
@@ -292,6 +301,7 @@
     const translatedText = document.getElementById('translatedText');
     const statusEl = document.getElementById('status');
     const browserWarning = document.getElementById('browserWarning');
+    const engineEl = document.getElementById('engine');
 
     const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
     let recognition = null;
@@ -373,15 +383,22 @@
       return source + '>' + target;
     }
 
-    // IMPORTANT: This function calls Translator.create immediately. It is invoked
-    // directly from the microphone button click so Chrome can download a language
-    // pack if one is needed while user activation is still present.
-    function prepareTranslator(source, target) {
-      if (source === target) return Promise.resolve(null);
+    function hasLocalTranslator() {
+      return 'Translator' in self;
+    }
 
-      if (!('Translator' in self)) {
-        return Promise.reject(new Error('Chrome built-in translation is not available on this browser/device.'));
+    function updateEngineLabel() {
+      if (hasLocalTranslator()) {
+        engineEl.textContent = 'Translation engine: on-device when available';
+      } else {
+        engineEl.textContent = 'Translation engine: cloud fallback (mobile-compatible)';
       }
+    }
+
+    // Chrome desktop can use its built-in Translator API. If it is not available
+    // (including on phones), we fall back to a simple cloud translation request.
+    function prepareTranslator(source, target) {
+      if (source === target || !hasLocalTranslator()) return Promise.resolve(null);
 
       const key = translatorKey(source, target);
       if (translatorCache.has(key)) return translatorCache.get(key);
@@ -414,6 +431,44 @@
       return promise;
     }
 
+    function decodeHtmlEntities(text) {
+      const textarea = document.createElement('textarea');
+      textarea.innerHTML = text || '';
+      return textarea.value;
+    }
+
+    async function translateWithCloud(text, source, target) {
+      // MyMemory is used only as a prototype fallback so the page can work on phones.
+      // For district production, replace this with a district-approved translation API.
+      const controller = new AbortController();
+      const timeout = setTimeout(() => controller.abort(), 15000);
+      const url = 'https://api.mymemory.translated.net/get?q=' +
+        encodeURIComponent(text) + '&langpair=' +
+        encodeURIComponent(source + '|' + target);
+
+      try {
+        const response = await fetch(url, {
+          method: 'GET',
+          headers: { 'Accept': 'application/json' },
+          signal: controller.signal
+        });
+
+        if (!response.ok) {
+          throw new Error('Cloud translation returned HTTP ' + response.status + '.');
+        }
+
+        const data = await response.json();
+        const translated = data && data.responseData && data.responseData.translatedText;
+        if (!translated) {
+          throw new Error('Cloud translation did not return translated text.');
+        }
+
+        return decodeHtmlEntities(translated);
+      } finally {
+        clearTimeout(timeout);
+      }
+    }
+
     async function translateText(text, source, target, translatorPromise) {
       if (!text || !text.trim()) return;
 
@@ -428,8 +483,24 @@
       showPlaceholder(translatedText, 'Translating...');
 
       try {
-        const translator = await translatorPromise;
-        const translated = await translator.translate(text.trim());
+        let translated = '';
+
+        if (hasLocalTranslator()) {
+          try {
+            const translator = await translatorPromise;
+            translated = await translator.translate(text.trim());
+            engineEl.textContent = 'Translation engine: on-device';
+          } catch (localErr) {
+            console.warn('Local translation unavailable; using cloud fallback.', localErr);
+            setStatus('Local translation unavailable. Trying mobile/cloud fallback...');
+            translated = await translateWithCloud(text.trim(), source, target);
+            engineEl.textContent = 'Translation engine: cloud fallback';
+          }
+        } else {
+          translated = await translateWithCloud(text.trim(), source, target);
+          engineEl.textContent = 'Translation engine: cloud fallback';
+        }
+
         lastTranslation = translated || '';
         showText(translatedText, lastTranslation);
         setStatus('Translation ready', 'success');
@@ -438,14 +509,16 @@
         lastTranslation = '';
         showPlaceholder(translatedText, 'Translation could not be completed.');
 
-        const details = err && err.message ? err.message : String(err || 'Unknown error');
+        const details = err && err.name === 'AbortError'
+          ? 'The cloud translation request timed out.'
+          : (err && err.message ? err.message : String(err || 'Unknown error'));
         setStatus('Translation error: ' + details, 'error');
       }
     }
 
     async function startRecognition() {
       if (!SpeechRecognition) {
-        setStatus('Speech recognition is not supported here. Open this page in current desktop Google Chrome.', 'error');
+        setStatus('Speech recognition is not supported in this browser. On Android, try Chrome; on iPhone/iPad, try Safari.', 'error');
         return;
       }
 
@@ -600,16 +673,18 @@
     sourceLang.addEventListener('change', languageChanged);
     targetLang.addEventListener('change', languageChanged);
 
+    updateEngineLabel();
+
     if (!window.isSecureContext) {
       setStatus('This page must be hosted over HTTPS for microphone access.', 'error');
       micBtn.disabled = true;
     } else if (!SpeechRecognition) {
-      showBrowserWarning('Speech recognition is not available in this browser. Open this GitHub Pages site in current desktop Google Chrome.');
+      showBrowserWarning('Speech recognition is not available in this browser. On Android, open the site in Chrome. On iPhone/iPad, try Safari.');
       setStatus('Speech recognition unavailable.', 'warning');
       micBtn.disabled = true;
-    } else if (!('Translator' in self)) {
-      showBrowserWarning('Chrome built-in translation is not available on this browser/device. Update desktop Chrome and reload this page.');
-      setStatus('Microphone is available, but the translation engine is not.', 'warning');
+    } else if (!hasLocalTranslator()) {
+      showBrowserWarning('Mobile mode: translation will use the cloud fallback. For this prototype, do not speak confidential or student-identifying information.');
+      setStatus('Ready — mobile/cloud translation mode', 'success');
     }
   </script>
 </body>
