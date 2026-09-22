@@ -57,7 +57,7 @@
       box-shadow: 0 8px 24px rgba(21, 43, 60, 0.08);
     }
 
-    .setup-warning {
+    .browser-warning {
       display: none;
       margin-bottom: 18px;
       padding: 14px 16px;
@@ -96,6 +96,8 @@
       background: #fff;
       color: var(--text);
     }
+
+    select:disabled { opacity: .65; }
 
     .swap-btn {
       border: 0;
@@ -199,9 +201,8 @@
       text-align: center;
       font-size: 13px;
       color: var(--muted);
-      line-height: 1.4;
+      line-height: 1.45;
     }
-
 
     @media (max-width: 700px) {
       .app { padding: 14px; }
@@ -221,10 +222,7 @@
     </div>
 
     <div class="card">
-      <div id="setupWarning" class="setup-warning">
-        <strong>One setup step remains:</strong> paste your deployed Apps Script web-app URL into the
-        <code>TRANSLATION_SERVICE_URL</code> line near the top of this file.
-      </div>
+      <div id="browserWarning" class="browser-warning"></div>
 
       <div class="language-row">
         <div>
@@ -277,18 +275,13 @@
         <button id="clearBtn" class="action-btn clear-btn">Clear</button>
       </div>
 
-      <div class="privacy">Test version: no conversation history is saved by the app.</div>
+      <div class="privacy">
+        Translation is performed by Chrome's built-in translator when supported. This test app does not save conversation history.
+      </div>
     </div>
   </div>
 
-
   <script>
-    // -------------------------------------------------------------------------
-    // SETUP: Paste the /exec URL from your Apps Script web-app deployment here.
-    // Example: https://script.google.com/macros/s/ABC123/exec
-    // -------------------------------------------------------------------------
-    const TRANSLATION_SERVICE_URL = 'https://script.google.com/macros/s/AKfycbxxp_0hSehKsEQ18Dfa6mPq91aVu4UE259JRDl_GhGV9S3fh965HbrPSn5Tntng1wlZ/exec';
-
     const sourceLang = document.getElementById('sourceLang');
     const targetLang = document.getElementById('targetLang');
     const micBtn = document.getElementById('micBtn');
@@ -298,22 +291,21 @@
     const heardText = document.getElementById('heardText');
     const translatedText = document.getElementById('translatedText');
     const statusEl = document.getElementById('status');
-    const setupWarning = document.getElementById('setupWarning');
+    const browserWarning = document.getElementById('browserWarning');
 
     const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
     let recognition = null;
     let isListening = false;
     let lastTranslation = '';
-    let activeNonce = '';
-    let translationTimer = null;
     let microphonePermissionChecked = false;
-
-    function serviceConfigured() {
-      return /^https:\/\/script\.google\.com\/macros\/s\/.+\/exec/.test(TRANSLATION_SERVICE_URL);
-    }
+    const translatorCache = new Map();
 
     function getSelectedLocale(select) {
       return select.options[select.selectedIndex].dataset.locale || select.value;
+    }
+
+    function getLanguageName(select) {
+      return select.options[select.selectedIndex].textContent;
     }
 
     function setStatus(message, kind = '') {
@@ -323,6 +315,9 @@
 
     function setListeningState(listening) {
       isListening = listening;
+      sourceLang.disabled = listening;
+      targetLang.disabled = listening;
+      swapBtn.disabled = listening;
       micBtn.classList.toggle('listening', listening);
       micBtn.innerHTML = listening ? '⏹️<br>Listening...' : '🎤<br>Tap to Speak';
     }
@@ -337,9 +332,9 @@
       el.classList.add('placeholder');
     }
 
-    function makeNonce() {
-      if (window.crypto && crypto.randomUUID) return crypto.randomUUID();
-      return Date.now() + '_' + Math.random().toString(36).slice(2);
+    function showBrowserWarning(message) {
+      browserWarning.textContent = message;
+      browserWarning.style.display = 'block';
     }
 
     async function ensureMicrophonePermission() {
@@ -351,7 +346,6 @@
       }
 
       if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
-        // SpeechRecognition may still work in some browsers. Let it try.
         microphonePermissionChecked = true;
         return true;
       }
@@ -365,7 +359,7 @@
       } catch (err) {
         console.error('Microphone permission error:', err);
         if (err && (err.name === 'NotAllowedError' || err.name === 'PermissionDeniedError')) {
-          setStatus('Microphone permission is blocked. Use the lock/site-controls icon in Chrome and allow Microphone, then reload.', 'error');
+          setStatus('Microphone permission is blocked. Use Chrome site controls to allow Microphone, then reload.', 'error');
         } else if (err && err.name === 'NotFoundError') {
           setStatus('Chrome cannot find a microphone on this device.', 'error');
         } else {
@@ -375,100 +369,100 @@
       }
     }
 
-    function translate(text) {
-      if (!serviceConfigured()) {
-        setupWarning.style.display = 'block';
-        setStatus('Translation service URL still needs to be added.', 'warning');
-        return;
+    function translatorKey(source, target) {
+      return source + '>' + target;
+    }
+
+    // IMPORTANT: This function calls Translator.create immediately. It is invoked
+    // directly from the microphone button click so Chrome can download a language
+    // pack if one is needed while user activation is still present.
+    function prepareTranslator(source, target) {
+      if (source === target) return Promise.resolve(null);
+
+      if (!('Translator' in self)) {
+        return Promise.reject(new Error('Chrome built-in translation is not available on this browser/device.'));
       }
 
+      const key = translatorKey(source, target);
+      if (translatorCache.has(key)) return translatorCache.get(key);
+
+      let promise;
+      try {
+        promise = Translator.create({
+          sourceLanguage: source,
+          targetLanguage: target,
+          monitor(monitor) {
+            monitor.addEventListener('downloadprogress', event => {
+              let pct = null;
+              if (typeof event.loaded === 'number') {
+                pct = event.loaded <= 1 ? Math.round(event.loaded * 100) : null;
+              }
+              setStatus(pct === null
+                ? 'Downloading translation language pack...'
+                : 'Downloading translation language pack... ' + pct + '%');
+            });
+          }
+        }).catch(err => {
+          translatorCache.delete(key);
+          throw err;
+        });
+      } catch (err) {
+        return Promise.reject(err);
+      }
+
+      translatorCache.set(key, promise);
+      return promise;
+    }
+
+    async function translateText(text, source, target, translatorPromise) {
       if (!text || !text.trim()) return;
 
-      // Cancel any older request timer. The newest speech segment wins.
-      if (translationTimer) {
-        clearTimeout(translationTimer);
-        translationTimer = null;
+      if (source === target) {
+        lastTranslation = text.trim();
+        showText(translatedText, lastTranslation);
+        setStatus('Translation ready', 'success');
+        return;
       }
-
-      activeNonce = makeNonce().replace(/[^A-Za-z0-9_-]/g, '');
-      const requestNonce = activeNonce;
-      const callbackName = 'prcsdTranslate_' + requestNonce.replace(/-/g, '_');
 
       setStatus('Translating...');
       showPlaceholder(translatedText, 'Translating...');
 
-      const script = document.createElement('script');
-      script.id = 'translationRequest_' + requestNonce;
+      try {
+        const translator = await translatorPromise;
+        const translated = await translator.translate(text.trim());
+        lastTranslation = translated || '';
+        showText(translatedText, lastTranslation);
+        setStatus('Translation ready', 'success');
+      } catch (err) {
+        console.error('Translation error:', err);
+        lastTranslation = '';
+        showPlaceholder(translatedText, 'Translation could not be completed.');
 
-      function cleanup() {
-        if (translationTimer) {
-          clearTimeout(translationTimer);
-          translationTimer = null;
-        }
-        try { delete window[callbackName]; } catch (_) { window[callbackName] = undefined; }
-        if (script.parentNode) script.parentNode.removeChild(script);
+        const details = err && err.message ? err.message : String(err || 'Unknown error');
+        setStatus('Translation error: ' + details, 'error');
       }
-
-      window[callbackName] = function(data) {
-        if (!data || data.type !== 'PRCSD_TRANSLATION_RESULT') return;
-        if (!activeNonce || data.nonce !== activeNonce) return;
-
-        activeNonce = '';
-        cleanup();
-
-        if (data.ok) {
-          lastTranslation = data.translated || '';
-          showText(translatedText, lastTranslation);
-          setStatus('Translation ready', 'success');
-        } else {
-          lastTranslation = '';
-          setStatus('Translation failed: ' + (data.error || 'Unknown error'), 'error');
-          showPlaceholder(translatedText, 'Translation failed.');
-        }
-      };
-
-      const params = new URLSearchParams({
-        action: 'translate',
-        text: text.trim(),
-        source: sourceLang.value,
-        target: targetLang.value,
-        nonce: requestNonce,
-        callback: callbackName
-      });
-
-      script.src = TRANSLATION_SERVICE_URL + '?' + params.toString();
-      script.async = true;
-
-      script.onerror = function() {
-        if (activeNonce !== requestNonce) return;
-        activeNonce = '';
-        cleanup();
-        lastTranslation = '';
-        setStatus('Could not reach the translation service. Make sure the Apps Script deployment is updated and accessible.', 'error');
-        showPlaceholder(translatedText, 'Translation service could not be reached.');
-      };
-
-      translationTimer = setTimeout(function() {
-        if (activeNonce !== requestNonce) return;
-        activeNonce = '';
-        cleanup();
-        lastTranslation = '';
-        setStatus('The translation service did not answer. Make sure Apps Script is redeployed to version 0.4.', 'error');
-        showPlaceholder(translatedText, 'Translation did not return.');
-      }, 15000);
-
-      document.head.appendChild(script);
     }
 
     async function startRecognition() {
       if (!SpeechRecognition) {
-        setStatus('Speech recognition is not supported in this browser. Open this page in current Google Chrome.', 'error');
+        setStatus('Speech recognition is not supported here. Open this page in current desktop Google Chrome.', 'error');
         return;
       }
 
       if (isListening && recognition) {
         recognition.stop();
         return;
+      }
+
+      const speechSource = sourceLang.value;
+      const speechTarget = targetLang.value;
+
+      // Start translator setup immediately from the user's click.
+      let translatorPromise;
+      try {
+        translatorPromise = prepareTranslator(speechSource, speechTarget);
+      } catch (err) {
+        translatorPromise = Promise.reject(err);
       }
 
       const allowed = await ensureMicrophonePermission();
@@ -482,6 +476,7 @@
 
       let finalTranscript = '';
       let interimTranscript = '';
+      let translationStarted = false;
 
       recognition.onstart = () => {
         setListeningState(true);
@@ -510,8 +505,9 @@
         if (displayText) showText(heardText, displayText);
 
         const latest = event.results[event.results.length - 1];
-        if (latest && latest.isFinal && finalTranscript.trim()) {
-          translate(finalTranscript.trim());
+        if (latest && latest.isFinal && finalTranscript.trim() && !translationStarted) {
+          translationStarted = true;
+          translateText(finalTranscript.trim(), speechSource, speechTarget, translatorPromise);
         }
       };
 
@@ -537,7 +533,10 @@
 
         if (text) {
           showText(heardText, text);
-          if (!activeNonce && !lastTranslation) translate(text);
+          if (!translationStarted) {
+            translationStarted = true;
+            translateText(text, speechSource, speechTarget, translatorPromise);
+          }
         } else if (!statusEl.classList.contains('error')) {
           setStatus('I did not catch anything. Tap the microphone and try again.', 'warning');
         }
@@ -577,8 +576,6 @@
       if (recognition && isListening) recognition.stop();
       if ('speechSynthesis' in window) window.speechSynthesis.cancel();
       lastTranslation = '';
-      activeNonce = '';
-      if (translationTimer) { clearTimeout(translationTimer); translationTimer = null; }
       showPlaceholder(heardText, 'Your speech will appear here.');
       showPlaceholder(translatedText, 'The translation will appear here.');
       setStatus('Ready');
@@ -592,20 +589,27 @@
       clearAll();
     }
 
+    function languageChanged() {
+      clearAll();
+    }
+
     micBtn.addEventListener('click', startRecognition);
     speakBtn.addEventListener('click', speakTranslation);
     clearBtn.addEventListener('click', clearAll);
     swapBtn.addEventListener('click', swapLanguages);
-
-    if (!serviceConfigured()) {
-      setupWarning.style.display = 'block';
-    }
+    sourceLang.addEventListener('change', languageChanged);
+    targetLang.addEventListener('change', languageChanged);
 
     if (!window.isSecureContext) {
       setStatus('This page must be hosted over HTTPS for microphone access.', 'error');
       micBtn.disabled = true;
     } else if (!SpeechRecognition) {
-      setStatus('Open this page in Google Chrome to use speech recognition.', 'warning');
+      showBrowserWarning('Speech recognition is not available in this browser. Open this GitHub Pages site in current desktop Google Chrome.');
+      setStatus('Speech recognition unavailable.', 'warning');
+      micBtn.disabled = true;
+    } else if (!('Translator' in self)) {
+      showBrowserWarning('Chrome built-in translation is not available on this browser/device. Update desktop Chrome and reload this page.');
+      setStatus('Microphone is available, but the translation engine is not.', 'warning');
     }
   </script>
 </body>
